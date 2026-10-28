@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-29
+
 ### Added
 - `NotificationRegistration`, which keeps the app's server told about this device. `refresh()`
   reads the permission and, when notifications are allowed, asks for an APNs token; the token is
