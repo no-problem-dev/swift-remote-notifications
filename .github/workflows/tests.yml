@@ -102,6 +102,8 @@ jobs:
       # **走らせない。ビルドするだけ。** スナップショットの像の照合はローカルのまま（§7）で、
       # ここが見るのは「そのコードがコンパイルできるか」だけ。destination が generic なので
       # シミュレータの起動も要らず、実測 32 秒。
+      # 製品が1つだけのパッケージには `-Package` の scheme が作られず、製品と同名の scheme だけになる。
+      # そのときはその1つを使う。
       - name: Build tests for iOS (compile only)
         run: |
           if ! grep -q '\.iOS(' Package.swift; then
@@ -109,7 +111,7 @@ jobs:
             exit 0
           fi
           SCHEME=$(xcodebuild -list -json | python3 -c \
-            'import json,sys; print(next(s for s in json.load(sys.stdin)["workspace"]["schemes"] if s.endswith("-Package")))')
+            'import json,sys; s=json.load(sys.stdin)["workspace"]["schemes"]; print(next((x for x in s if x.endswith("-Package")), s[0]))')
           echo "scheme: $SCHEME"
           xcodebuild build-for-testing -scheme "$SCHEME" \
             -destination 'generic/platform=iOS Simulator' -quiet
