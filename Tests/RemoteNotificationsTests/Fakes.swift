@@ -37,15 +37,25 @@ final class FakeApplication: RemoteNotificationRegistering {
     func registerForRemoteNotifications() { registerCalls += 1 }
 }
 
-/// Records what was sent. When `gate` is set, each send waits until `release()` is called.
+/// Records what was sent and unregistered, in order. When `gate` is set, each send waits until
+/// `release()` is called.
 actor Sender {
+    enum Request: Equatable {
+        case send(String?)
+        case unregister(String)
+    }
+
     private(set) var sent: [DeviceRegistration] = []
+    private(set) var unregistered: [String] = []
+    private(set) var requests: [Request] = []
     private var failNext = false
+    private var failNextUnregister = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
     private var gated = false
 
     func gate() { gated = true }
     func failOnce() { failNext = true }
+    func failUnregisterOnce() { failNextUnregister = true }
 
     func release() {
         gated = false
@@ -62,6 +72,16 @@ actor Sender {
             throw SendError()
         }
         sent.append(registration)
+        requests.append(.send(registration.token))
+    }
+
+    func unregister(_ token: String) async throws {
+        if failNextUnregister {
+            failNextUnregister = false
+            throw SendError()
+        }
+        unregistered.append(token)
+        requests.append(.unregister(token))
     }
 }
 
@@ -73,7 +93,7 @@ let tokyo = DeviceContext(timeZone: "Asia/Tokyo", locale: "ja-JP", appVersion: "
 func makeRegistration(
     permission: FakePermission,
     application: FakeApplication = FakeApplication(),
-    store: InMemoryRegistrationStore = InMemoryRegistrationStore(),
+    store: InMemoryRegistrationStore = InMemoryRegistrationStore(account: "user-a"),
     sender: Sender,
     environment: APNsEnvironment = .production,
     context: @escaping @Sendable () -> DeviceContext = { tokyo },
@@ -86,6 +106,7 @@ func makeRegistration(
         permission: permission,
         application: application,
         onFailure: onFailure,
-        send: { try await sender.send($0) }
+        send: { try await sender.send($0) },
+        unregister: { try await sender.unregister($0) }
     )
 }

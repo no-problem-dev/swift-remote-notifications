@@ -19,6 +19,8 @@ reported are closures the app passes in, so the same code serves any backend.
 - On every launch, gets the device token and reports it with the APNs environment, time zone,
   language, app version and permission
 - Reports devices that do not allow notifications as well, so the server can count reach
+- Knows which account the token is registered for: a sign-in to another account sends the same
+  token again so the server moves it, and a sign-out tells the server to drop it
 - Sends nothing when nothing has changed since the last registration the server accepted
 - On a tap, hands the payload's `route` to the app and reports its `send_id`
 - Foreground presentation is a parameter
@@ -31,12 +33,19 @@ reported are closures the app passes in, so the same code serves any backend.
 ```swift
 import RemoteNotifications
 
-let registration = NotificationRegistration { registration in
-    try await api.registerDevice(registration)   // your server, your request
-}
+let registration = NotificationRegistration(
+    send: { registration in try await api.registerDevice(registration) },  // your server, your request
+    unregister: { token in try await api.unregisterDevice(token: token) }
+)
+
+// Once the session is known: at every launch, and after each sign-in or account switch
+await registration.signIn(account: user.id)
 
 // At launch and each time the app comes to the foreground
 await registration.refresh()
+
+// Before ending the session
+await registration.signOut()
 
 // When the moment is right to ask
 try await registration.requestAuthorization()                 // shows the prompt
@@ -63,9 +72,26 @@ What `refresh()` does:
   when the token comes back through the app delegate
 - If they do not, it sends the registration at once with the last token the device had, so the
   server can mark that token as unreachable
-- A registration equal to the last one `send` returned from is skipped, across launches
-  (`UserDefaultsRegistrationStore` by default). If `send` throws, the next refresh sends it again
-- Sends never overlap; a change that arrives during one is sent after it
+- A registration equal to the last one `send` returned from **for the same account** is skipped,
+  across launches (`UserDefaultsRegistrationStore` by default). If `send` throws, the next refresh
+  sends it again
+- Requests never overlap; a change that arrives during one is sent after it
+
+### Accounts
+
+An APNs token belongs to the app's installation, not to the person signed in. When someone else
+signs in on the same device the token stays the same, so the server only learns of it if told.
+
+| When | Call | What reaches the server |
+|---|---|---|
+| The session is known (every launch, after sign-in, after an account switch) | `signIn(account:)` | The registration, again, when the account differs from the one the token was last registered for. The server should move the token to that account — the last account to register a token owns it |
+| An anonymous account is linked to Apple or Google and keeps its id | `signIn(account:)` with the same id | Nothing |
+| Signing out | `signOut()`, **before** ending the session | `unregister(token)`. If it throws, it is retried on the next refresh — or made unnecessary by the next sign-in |
+| The server deleted the account and its devices | `forgetAccount()` | Nothing |
+
+Until `signIn(account:)` is called, nothing is registered. `account` is kept on the device and
+compared; it is never sent by the package — `send` runs with whatever authentication the app has
+for the signed-in person.
 
 ### Opening a notification
 
@@ -102,7 +128,10 @@ final class Router {
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
     let router = Router()
-    let registration = NotificationRegistration { try await API.shared.registerDevice($0) }
+    let registration = NotificationRegistration(
+        send: { try await API.shared.registerDevice($0) },
+        unregister: { try await API.shared.unregisterDevice(token: $0) }
+    )
     lazy var notifications = NotificationCenterDelegate(
         reportOpened: { try await API.shared.reportOpened($0) },
         onOpen: { [router] open in router.pendingRoute = open.route }

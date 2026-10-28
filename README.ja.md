@@ -16,6 +16,7 @@
 - 許可の状態を読む・頼む（provisionalも選べる）
 - 起動のたびにデバイストークンを取り、APNsの環境・タイムゾーン・言語・アプリの版・許可の状態と一緒に渡す
 - 通知を許可していない端末も知らせる。サーバーが届く人数と届かない人数を数えられる
+- トークンをどのアカウントで登録したかを覚える。別のアカウントにサインインしたら同じトークンを送り直してサーバーに持ち主を移させ、サインアウトしたらサーバーに外させる
 - 前回サーバーが受け付けた登録から何も変わっていなければ送らない
 - 通知を押されたら、payloadの`route`をアプリに渡し、`send_id`を開いたとして知らせる
 - アプリを開いているときの通知の出し方を引数で決められる
@@ -28,12 +29,19 @@
 ```swift
 import RemoteNotifications
 
-let registration = NotificationRegistration { registration in
-    try await api.registerDevice(registration)   // 送り先と送り方はアプリが決める
-}
+let registration = NotificationRegistration(
+    send: { registration in try await api.registerDevice(registration) },  // 送り先と送り方はアプリが決める
+    unregister: { token in try await api.unregisterDevice(token: token) }
+)
+
+// 誰がサインインしているか分かったとき：起動のたび、サインインしたとき、アカウントを切り替えたとき
+await registration.signIn(account: user.id)
 
 // 起動したとき、前面に戻るたびに
 await registration.refresh()
+
+// サインアウトする前に
+await registration.signOut()
 
 // 許可を頼むとき
 try await registration.requestAuthorization()                 // 確認のダイアログを出す
@@ -57,8 +65,21 @@ try await registration.requestAuthorization(provisional: true) // ダイアロ�
 
 - 許可されていれば、システムにトークンを頼む。トークンがアプリデリゲート経由で届いたら登録を送る
 - 許可されていなければ、端末が最後に持っていたトークンを付けてすぐ送る。サーバーはそのトークンを届かない物として扱える
-- `send`が最後に成功した登録と同じなら送らない。起動をまたいでも効く（既定は`UserDefaultsRegistrationStore`）。`send`が投げたら、次のrefreshで送り直す
+- **同じアカウントで**`send`が最後に成功した登録と同じなら送らない。起動をまたいでも効く（既定は`UserDefaultsRegistrationStore`）。`send`が投げたら、次のrefreshで送り直す
 - 送信は重ならない。送っている間に起きた変化は、終わってから送る
+
+### アカウント
+
+APNsのトークンはアプリの入れ物に1つで、誰がサインインしているかでは変わらない。同じ端末で別の人がサインインしても、トークンは同じ。サーバーは、伝えられなければ持ち主が変わったことを知れない。
+
+| いつ | 呼ぶもの | サーバーに届くもの |
+|---|---|---|
+| 誰がサインインしているか分かったとき（起動のたび・サインインしたとき・アカウントを切り替えたとき） | `signIn(account:)` | 前にトークンを登録したアカウントと違えば、登録をもう一度送る。サーバーはトークンをそのアカウントに移す（最後に登録したアカウントが持ち主） |
+| 匿名のアカウントをAppleやGoogleにリンクして、idが変わらない | 同じidで`signIn(account:)` | 何も届かない |
+| サインアウト | **セッションを終える前に**`signOut()` | `unregister(token)`。投げたら次のrefreshで外し直す。先に次の人がサインインすれば、その登録で持ち主が移るので外さなくてよくなる |
+| サーバーがアカウントと端末を消した | `forgetAccount()` | 何も届かない |
+
+`signIn(account:)`を呼ぶまでは何も登録しない。`account`は端末に置いて比べるだけで、パッケージからは送らない。`send`はアプリがいまの人の資格で送る。
 
 ### 通知を押されたとき
 
@@ -93,7 +114,10 @@ final class Router {
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
     let router = Router()
-    let registration = NotificationRegistration { try await API.shared.registerDevice($0) }
+    let registration = NotificationRegistration(
+        send: { try await API.shared.registerDevice($0) },
+        unregister: { try await API.shared.unregisterDevice(token: $0) }
+    )
     lazy var notifications = NotificationCenterDelegate(
         reportOpened: { try await API.shared.reportOpened($0) },
         onOpen: { [router] open in router.pendingRoute = open.route }

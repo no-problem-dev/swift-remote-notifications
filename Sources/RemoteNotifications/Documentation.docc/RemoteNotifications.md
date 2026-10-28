@@ -15,7 +15,14 @@ the app delegate it builds a ``DeviceRegistration`` — the token, the ``APNsEnv
 valid on, the time zone, the language, the app version and the ``NotificationAuthorization`` —
 and hands it to `send`. A device that does not allow notifications is reported too, with the last
 token it had, so the server can count who it cannot reach. A registration equal to the last one
-accepted is not sent again.
+accepted for the same account is not sent again.
+
+The token belongs to the installation, not to the person signed in, so the app says who that is:
+``NotificationRegistration/signIn(account:)`` once the session is known and after every sign-in
+or switch — a different account sends the same token again so the server moves it —
+``NotificationRegistration/signOut()`` before ending a session, which asks the server through
+`unregister` to drop the token, and ``NotificationRegistration/forgetAccount()`` after the
+server has deleted the account.
 
 ``NotificationCenterDelegate`` is the `UNUserNotificationCenterDelegate`. It shows notifications
 that arrive while the app is open, gives each opened notification to the app as a
@@ -23,7 +30,10 @@ that arrive while the app is open, gives each opened notification to the app as 
 
 ```swift
 final class AppDelegate: NSObject, UIApplicationDelegate {
-    let registration = NotificationRegistration { try await api.registerDevice($0) }
+    let registration = NotificationRegistration(
+        send: { try await api.registerDevice($0) },
+        unregister: { try await api.unregisterDevice(token: $0) }
+    )
     let notifications = NotificationCenterDelegate(
         reportOpened: { try await api.reportOpened($0) },
         onOpen: { open in Router.shared.pendingRoute = open.route }
@@ -85,6 +95,7 @@ and ``RegistrationStore``. Pass fakes of all three and the whole registration fl
 ### Keeping state between launches
 
 - ``RegistrationStore``
+- ``RegisteredDevice``
 - ``UserDefaultsRegistrationStore``
 - ``InMemoryRegistrationStore``
 
