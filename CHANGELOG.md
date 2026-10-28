@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-28
+
 ### Added
 - `NotificationRegistration.signIn(account:)`, which says who is signed in and refreshes the
   registration for them. A different account than the one the token was last registered for

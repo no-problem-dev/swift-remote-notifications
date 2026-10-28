@@ -187,7 +187,7 @@ Firebaseは既定でアプリデリゲートを差し替える。そのままだ
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/no-problem-dev/swift-remote-notifications.git", .upToNextMinor(from: "0.1.0"))
+    .package(url: "https://github.com/no-problem-dev/swift-remote-notifications.git", .upToNextMinor(from: "0.2.0"))
 ]
 ```
 
