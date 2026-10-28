@@ -13,7 +13,7 @@ struct NotificationRegistrationTests {
     func authorizedRegistersAndSendsToken() async throws {
         let app = FakeApplication()
         let sender = Sender()
-        let store = InMemoryRegistrationStore()
+        let store = InMemoryRegistrationStore(account: "user-a")
         let registration = makeRegistration(permission: FakePermission(.authorized), application: app, store: store, sender: sender)
 
         #expect(await registration.refresh() == .authorized)
@@ -27,7 +27,7 @@ struct NotificationRegistrationTests {
                                locale: "ja-JP", appVersion: "1.0.0", authorization: .authorized)
         ])
         #expect(store.token == tokenHex)
-        #expect(store.lastSent?.token == tokenHex)
+        #expect(store.registered == RegisteredDevice(account: "user-a", registration: await sender.sent[0]))
     }
 
     @Test("provisional でもトークンを取りに行く")
@@ -71,7 +71,7 @@ struct NotificationRegistrationTests {
 
     @Test("前回受け付けられた登録と同じなら送らない（起動をまたいでも）")
     func skipsDuplicateAcrossLaunches() async {
-        let store = InMemoryRegistrationStore()
+        let store = InMemoryRegistrationStore(account: "user-a")
         let sender = Sender()
 
         let first = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
@@ -88,7 +88,7 @@ struct NotificationRegistrationTests {
 
     @Test("トークン・言語・版のどれかが変われば送り直す")
     func resendsOnChange() async {
-        let store = InMemoryRegistrationStore()
+        let store = InMemoryRegistrationStore(account: "user-a")
         let sender = Sender()
         await makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
             .receive(deviceToken: tokenBytes)
@@ -176,15 +176,189 @@ struct NotificationRegistrationTests {
         let suite = "RemoteNotificationsTests.\(#function)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let value = DeviceRegistration(token: tokenHex, apnsEnvironment: .sandbox, timeZone: "UTC",
-                                       locale: "en", appVersion: "2", authorization: .denied)
+        let value = RegisteredDevice(
+            account: "user-a",
+            registration: DeviceRegistration(token: tokenHex, apnsEnvironment: .sandbox, timeZone: "UTC",
+                                              locale: "en", appVersion: "2", authorization: .denied)
+        )
 
         let store = UserDefaultsRegistrationStore(defaults: defaults)
         store.token = tokenHex
-        store.lastSent = value
+        store.account = "user-a"
+        store.registered = value
+        store.tokenToUnregister = "ab"
 
         let reopened = UserDefaultsRegistrationStore(defaults: defaults)
         #expect(reopened.token == tokenHex)
-        #expect(reopened.lastSent == value)
+        #expect(reopened.account == "user-a")
+        #expect(reopened.registered == value)
+        #expect(reopened.tokenToUnregister == "ab")
+    }
+}
+
+/// トークンはアプリの入れ物に1つで、誰がサインインしているかでは変わらない。サーバーに「誰の端末か」を
+/// 伝え直せるのは、端末の側がアカウントの変化を知っているときだけ。
+@Suite("端末とアカウント")
+@MainActor
+struct AccountBindingTests {
+
+    @Test("誰もサインインしていなければ何も送らない。サインインしたら送る")
+    func nothingBeforeSignIn() async {
+        let sender = Sender()
+        let store = InMemoryRegistrationStore()
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
+        await registration.refresh()
+        await registration.receive(deviceToken: tokenBytes)
+        #expect(await sender.requests.isEmpty)
+
+        await registration.signIn(account: "user-a")
+        #expect(await sender.requests == [.send(tokenHex)])
+        #expect(registration.account == "user-a")
+    }
+
+    /// ストックレーダーで 2026-08-02 に起きた：入れ直しで作られた匿名の id にトークンが登録され、
+    /// 元のアカウントにサインインし直しても「登録済み」と判断して送らなかった。サーバーは元の id に古いトークンを持ち続けた
+    @Test("トークンが同じでも、アカウントが変わったら送り直す。新しいトークンを待たない")
+    func accountSwitchResendsSameToken() async {
+        let sender = Sender()
+        let store = InMemoryRegistrationStore(account: "anon-1")
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
+        await registration.refresh()
+        await registration.receive(deviceToken: tokenBytes)
+
+        await registration.signIn(account: "account-b")
+        #expect(await sender.requests == [.send(tokenHex), .send(tokenHex)])
+        #expect(store.registered?.account == "account-b")
+    }
+
+    @Test("同じアカウントでのサインイン（匿名から Apple・Google にリンクして id が変わらない）は送らない")
+    func sameAccountSendsNothing() async {
+        let sender = Sender()
+        let registration = makeRegistration(permission: FakePermission(.authorized), sender: sender)
+        await registration.receive(deviceToken: tokenBytes)
+        await registration.signIn(account: "user-a")
+        await registration.signIn(account: "user-a")
+        #expect(await sender.requests == [.send(tokenHex)])
+    }
+
+    @Test("サインアウトでトークンを外す。次にサインインするまで登録しない")
+    func signOutUnregisters() async {
+        let sender = Sender()
+        let store = InMemoryRegistrationStore(account: "user-a")
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
+        await registration.receive(deviceToken: tokenBytes)
+
+        await registration.signOut()
+        await registration.refresh()
+        await registration.receive(deviceToken: tokenBytes)
+
+        #expect(await sender.requests == [.send(tokenHex), .unregister(tokenHex)])
+        #expect(store.account == nil)
+        #expect(store.registered == nil)
+        #expect(store.tokenToUnregister == nil)
+
+        await registration.signIn(account: "user-b")
+        #expect(await sender.requests.last == .send(tokenHex))
+    }
+
+    @Test("許可していない端末でも、前に持っていたトークンを外す")
+    func signOutUnregistersDeniedDevice() async {
+        let sender = Sender()
+        let permission = FakePermission(.authorized)
+        let registration = makeRegistration(permission: permission, sender: sender)
+        await registration.receive(deviceToken: tokenBytes)
+        permission.status = .denied
+        await registration.refresh()
+
+        await registration.signOut()
+        #expect(await sender.unregistered == [tokenHex])
+    }
+
+    @Test("サインアウトが届かなければ覚えておき、次の refresh で外し直す")
+    func failedSignOutIsRetried() async {
+        let sender = Sender()
+        await sender.failUnregisterOnce()
+        var failures: [RegistrationFailure] = []
+        let store = InMemoryRegistrationStore(account: "user-a")
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender,
+                                            onFailure: { failures.append($0) })
+        await registration.receive(deviceToken: tokenBytes)
+
+        await registration.signOut()
+        #expect(store.tokenToUnregister == tokenHex)
+        if case .unregister = failures.first {} else { Issue.record("unregister の失敗として届いていない") }
+
+        await registration.refresh()
+        #expect(await sender.unregistered == [tokenHex])
+        #expect(store.tokenToUnregister == nil)
+    }
+
+    @Test("外し直す前に次の人がサインインしたら、外してから次の人で登録する")
+    func leftoverIsUnregisteredBeforeTheNextAccount() async {
+        let sender = Sender()
+        await sender.failUnregisterOnce()
+        let store = InMemoryRegistrationStore(account: "user-a")
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
+        await registration.receive(deviceToken: tokenBytes)
+        await registration.signOut()
+
+        await registration.signIn(account: "user-b")
+        #expect(await sender.requests == [.send(tokenHex), .unregister(tokenHex), .send(tokenHex)])
+        #expect(store.registered?.account == "user-b")
+    }
+
+    @Test("外すのがまた届かなくても、次の人の登録が届けば持ち主は移ったので、外すのはやめる")
+    func registrationSupersedesLeftover() async {
+        let sender = Sender()
+        let store = InMemoryRegistrationStore(account: "user-a")
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
+        await registration.receive(deviceToken: tokenBytes)
+        await sender.failUnregisterOnce()
+        await registration.signOut()
+        await sender.failUnregisterOnce()
+
+        await registration.signIn(account: "user-b")
+        #expect(await sender.requests == [.send(tokenHex), .send(tokenHex)])
+        #expect(store.tokenToUnregister == nil)
+
+        await registration.refresh()
+        #expect(await sender.unregistered.isEmpty)
+    }
+
+    @Test("アカウントの削除のあとは何も送らずに忘れる。次のサインインで送る")
+    func forgetAccountSendsNothing() async {
+        let sender = Sender()
+        let store = InMemoryRegistrationStore(account: "user-a")
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
+        await registration.receive(deviceToken: tokenBytes)
+
+        registration.forgetAccount()
+        await registration.refresh()
+        #expect(await sender.requests == [.send(tokenHex)])
+        #expect(store.registered == nil)
+
+        await registration.signIn(account: "user-a2")
+        #expect(await sender.requests == [.send(tokenHex), .send(tokenHex)])
+    }
+
+    @Test("送っている間にサインアウトしたら、送れた登録を覚えずに外す")
+    func signOutDuringSend() async {
+        let sender = Sender()
+        await sender.gate()
+        let store = InMemoryRegistrationStore(account: "user-a")
+        let registration = makeRegistration(permission: FakePermission(.authorized), store: store, sender: sender)
+
+        let first = Task { await registration.receive(deviceToken: tokenBytes) }
+        while await sender.waitingCount == 0 { await Task.yield() }
+        await registration.signOut()
+        await sender.release()
+        await first.value
+
+        #expect(await sender.requests == [.send(tokenHex), .unregister(tokenHex)])
+        #expect(store.registered == nil)
+
+        // 同じ人がサインインし直したら、登録し直す
+        await registration.signIn(account: "user-a")
+        #expect(await sender.requests.last == .send(tokenHex))
     }
 }

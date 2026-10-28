@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `NotificationRegistration.signIn(account:)`, which says who is signed in and refreshes the
+  registration for them. A different account than the one the token was last registered for
+  sends the same token again, so the server moves it; the same account sends nothing.
+- `NotificationRegistration.signOut()`, which asks the server through the new `unregister`
+  closure to drop this device's token, and retries on the next refresh if that fails.
+- `NotificationRegistration.forgetAccount()`, for after the server has deleted the account: it
+  forgets what was sent without a request.
+- `NotificationRegistration.account`, the account signed in now.
+- `RegisteredDevice`: what the server holds — the account and the registration it accepted.
+- `RegistrationFailure.unregister`.
+
+### Changed
+- **Breaking:** `NotificationRegistration.init` takes `unregister:` after `send:`.
+- **Breaking:** nothing is registered until `signIn(account:)` has been called. A registration is
+  compared with the last accepted one together with its account, so switching accounts on a
+  device whose token has not changed is no longer skipped — the server kept the token on the
+  previous account.
+- **Breaking:** `RegistrationStore` keeps `account`, `registered` and `tokenToUnregister` in place
+  of `lastSent`. `UserDefaultsRegistrationStore` uses new keys, so each device sends its
+  registration once after updating.
+- With notifications allowed, `refresh()` sends the token the device already has instead of
+  waiting for the system to hand it over again.
+
 ## [0.1.0] - 2026-10-29
 
 ### Added
