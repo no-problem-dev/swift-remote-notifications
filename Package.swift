@@ -16,9 +16,6 @@ let package = Package(
         // `#if canImport`, so the decision logic builds and tests on macOS with `swift test`.
         .library(name: "RemoteNotifications", targets: ["RemoteNotifications"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.0")
-    ],
     targets: [
         .target(name: "RemoteNotifications"),
         .testTarget(name: "RemoteNotificationsTests", dependencies: ["RemoteNotifications"])
