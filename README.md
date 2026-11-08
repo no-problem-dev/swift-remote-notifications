@@ -191,7 +191,7 @@ language, and the whole flow runs under `swift test` without a simulator.
 
 ## Documentation
 
-**[API documentation](https://no-problem-dev.github.io/swift-remote-notifications/documentation/remotenotifications/)**
+**[API documentation](Sources/RemoteNotifications/Documentation.docc)**
 
 ## Requirements
 
