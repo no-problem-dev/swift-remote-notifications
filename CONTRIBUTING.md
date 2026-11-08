@@ -11,18 +11,15 @@ clearest possible report.
 ## Working on a change
 
 ```bash
-swift build
+swift build --build-tests
 swift test
 ```
 
-**CI runs `swift build` and `swift test` on every push and pull request**
-(`.github/workflows/tests.yml`), resolving dependencies fresh rather than from a
-cache. That run is the authority: a local `.build` left over from an earlier
-resolve can report green where a fresh checkout does not. Run both commands
-locally first anyway — it is faster than waiting for a runner.
+**There is no CI.** Run both commands locally and make sure they pass before
+opening a pull request.
 
 Code that only compiles for iOS (`#if canImport(UIKit)`) is left out of the macOS
-run; CI also builds the tests for the iOS Simulator, compile only, to catch it.
+run, so also build the tests for the iOS Simulator (compile only) to catch it.
 Keep decisions out of those blocks so `swift test` covers them.
 
 Documentation lives in the DocC catalog under `Sources/*/*.docc/`. Public
@@ -30,18 +27,15 @@ declarations are documented with `///` comments, in English.
 
 ## Releasing
 
-Maintainers only. Release from a commit whose Tests run is green — `release-on-tag.yml`
-turns a tag into a GitHub Release and nothing else, so nothing is compiled on the
-way out. The version is **computed, never chosen**:
+Maintainers only.
 
-```bash
-scripts/release.sh --dry-run   # see what version the API diff implies
-scripts/release.sh             # stamp CHANGELOG, tag, push
-```
+1. In `CHANGELOG.md`, turn `## [Unreleased]` into `## [x.y.z] - YYYY-MM-DD` and
+   merge that to `main`.
+2. Tag the merge and push the tag:
 
-Write what changed under `## [Unreleased]` in `CHANGELOG.md` — prose only, no
-version number. `scripts/release.sh` compares the public API against the last
-release and derives the version from the actual difference: a removed or changed
-public symbol means a major, additions mean a minor, and a change in the
-generation of a dependency whose types appear in this package's public API also
-means a major.
+   ```bash
+   git tag x.y.z && git push origin x.y.z
+   ```
+
+Versions follow [SemVer](https://semver.org) with bare tags (`1.2.3`, no `v`).
+While the major version is 0, a breaking change bumps the minor version.

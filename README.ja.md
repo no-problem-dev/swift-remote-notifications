@@ -173,7 +173,7 @@ Firebaseは既定でアプリデリゲートを差し替える。そのままだ
 
 ## ドキュメント
 
-**[APIドキュメント](https://no-problem-dev.github.io/swift-remote-notifications/documentation/remotenotifications/)**
+**[APIドキュメント](Sources/RemoteNotifications/Documentation.docc)**
 
 ## 動作環境
 
